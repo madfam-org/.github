@@ -101,7 +101,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: madfam-org/.github
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ github.job_workflow_sha || 'main' }}
           path: .madfam-gates
 
       - name: Byte gate (control bytes, BOM, U+2028/U+2029)
@@ -134,7 +134,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: madfam-org/.github
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ github.job_workflow_sha || 'main' }}
           path: .madfam-gates
 
       - name: Fail closed when the baseline is missing
