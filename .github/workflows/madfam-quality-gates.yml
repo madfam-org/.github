@@ -1,0 +1,165 @@
+---
+# MADFAM org-shared quality gates.
+#
+# Two independent jobs, each behind its own input, so a caller can adopt one
+# without the other:
+#   byte_check (default true)  — invisible-byte gate. Zero deps, plain node .mjs.
+#   size_check (default false) — file-size gate. OPT-IN: it needs a per-repo
+#                                grandfather baseline committed first, so
+#                                defaulting it on would turn unprepared repos red.
+#
+# Caller pattern:
+#
+#   jobs:
+#     quality-gates:
+#       uses: madfam-org/.github/.github/workflows/madfam-quality-gates.yml@main
+#       with:
+#         byte_check: true
+#         size_check: false
+#
+# VISIBILITY REQUIREMENT (learned the hard way — see README):
+# A private repo cannot host a reusable workflow that other repos call; GitHub
+# rejects the run before scheduling any job (0 jobs, 0s, red X that looks like a
+# failing gate but is a gate that never existed). This home repo must stay
+# PUBLIC or INTERNAL. Proven working shape in this org: private `nauta` calls
+# public `enclii/.github/workflows/build-publish.yml`.
+#
+# Runner policy per ADR-010 form 2 (ARC bootstrap fallback).
+name: MADFAM Quality Gates
+
+on:
+  workflow_call:
+    inputs:
+      byte_check:
+        description: 'Run the invisible-byte gate (control bytes, BOM, U+2028/9).'
+        type: boolean
+        default: true
+      size_check:
+        description: 'Run the file-size gate. Opt-in: needs a committed baseline.'
+        type: boolean
+        default: false
+      node_version:
+        description: 'Node version for both gates.'
+        type: string
+        default: '20'
+      byte_text_exts:
+        description: 'Comma-separated extensions scanned for control bytes/BOM.'
+        type: string
+        default: '.ts,.tsx,.js,.mjs,.cjs,.css,.md,.sql,.json,.yml,.yaml,.sh,.prisma'
+      byte_code_exts:
+        description: 'Comma-separated code extensions additionally scanned for U+2028/U+2029.'
+        type: string
+        default: '.ts,.tsx,.js,.mjs,.cjs'
+      byte_paths:
+        description: 'Optional comma-separated path prefixes to limit the byte scan (empty = whole repo).'
+        type: string
+        default: ''
+      size_baseline:
+        description: 'Path to the grandfather baseline JSON, relative to the repo root.'
+        type: string
+        default: 'scripts/size-limit-baseline.json'
+      size_include:
+        description: 'Comma-separated dir:ext[:ext] rules for the size gate.'
+        type: string
+        default: 'src/:.ts:.tsx,scripts/:.ts,prisma/:.ts'
+      size_warn_at:
+        description: 'Warn threshold in lines (never fails the build).'
+        type: number
+        default: 600
+      size_fail_at:
+        description: 'Hard-fail threshold in lines.'
+        type: number
+        default: 800
+      runner:
+        description: 'Optional runner override. Empty uses the ADR-010 ARC bootstrap fallback.'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  byte-check:
+    if: inputs.byte_check
+    name: Byte gate
+    runs-on: >-
+      ${{ inputs.runner != '' && inputs.runner
+      || (vars.ARC_BOOTSTRAP_COMPLETE == 'true' && 'madfam-runners-blue' || 'ubuntu-latest') }}
+    steps:
+      # fetch-depth 0 is unnecessary: the gate reads the working tree via
+      # `git ls-files`, not history.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      # The gate script lives in THIS shared repo, not the caller's. Check it
+      # out to a side path so it can never collide with caller files, and run it
+      # from the caller's root so `git ls-files` sees the caller's tree.
+      - name: Check out shared gate scripts
+        uses: actions/checkout@v4
+        with:
+          repository: madfam-org/.github
+          ref: ${{ github.workflow_sha }}
+          path: .madfam-gates
+
+      - name: Byte gate (control bytes, BOM, U+2028/U+2029)
+        env:
+          TEXT_EXTS: ${{ inputs.byte_text_exts }}
+          CODE_EXTS: ${{ inputs.byte_code_exts }}
+          PATHS: ${{ inputs.byte_paths }}
+        run: |
+          set -euo pipefail
+          args=(--text-exts "$TEXT_EXTS" --code-exts "$CODE_EXTS")
+          if [ -n "$PATHS" ]; then
+            args+=(--paths "$PATHS")
+          fi
+          node .madfam-gates/scripts/check-source-bytes.mjs "${args[@]}"
+
+  size-check:
+    if: inputs.size_check
+    name: File-size gate
+    runs-on: >-
+      ${{ inputs.runner != '' && inputs.runner
+      || (vars.ARC_BOOTSTRAP_COMPLETE == 'true' && 'madfam-runners-blue' || 'ubuntu-latest') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Check out shared gate scripts
+        uses: actions/checkout@v4
+        with:
+          repository: madfam-org/.github
+          ref: ${{ github.workflow_sha }}
+          path: .madfam-gates
+
+      - name: Fail closed when the baseline is missing
+        env:
+          BASELINE: ${{ inputs.size_baseline }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$BASELINE" ]; then
+            echo "::error::size_check is enabled but '$BASELINE' does not exist in this repo."
+            echo "The file-size gate is grandfathered: it needs a committed baseline of"
+            echo "current offenders, or every pre-existing large file fails CI at once."
+            echo "Generate one, review it, and commit it before enabling size_check."
+            exit 1
+          fi
+
+      - name: File-size gate (warn/fail thresholds + grandfather baseline)
+        env:
+          BASELINE: ${{ inputs.size_baseline }}
+          INCLUDE: ${{ inputs.size_include }}
+          WARN_AT: ${{ inputs.size_warn_at }}
+          FAIL_AT: ${{ inputs.size_fail_at }}
+        run: |
+          set -euo pipefail
+          npx --yes tsx .madfam-gates/scripts/check-file-size.ts \
+            --baseline "$BASELINE" \
+            --include "$INCLUDE" \
+            --warn-at "$WARN_AT" \
+            --fail-at "$FAIL_AT"
