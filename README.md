@@ -6,12 +6,12 @@ inputs.
 
 ## Why the byte gate exists
 
-On **2026-09-01** a literal **NUL byte** inside a string in `crea-map` (written as
-an "impossible id" sentinel) **passed every gate we had**: Node ran it, `tsc` typed
-it, the bundler packed it, lint was clean and the tests were green. In production it
-broke evaluation of the served chunk, and with it the hydration of *every* client
-island — with **no console error at all**. Git's only tell was the word `Bin` in
-`git diff --stat` (PR #200 → revert #201 → re-land #202).
+On **2026-09-01** a literal **NUL byte** inside a string in one of the org's
+repositories (written as an "impossible id" sentinel) **passed every gate we had**:
+Node ran it, `tsc` typed it, the bundler packed it, lint was clean and the tests were
+green. In production it broke evaluation of the served chunk, and with it the
+hydration of *every* client island — with **no console error at all**. Git's only
+tell was the word `Bin` in `git diff --stat` (the change was reverted, then re-landed).
 
 The gate makes that one signal explicit and blocking: raw control bytes, a BOM
 anywhere in the file, and U+2028/U+2029 in code all fail CI with file, line and
@@ -83,8 +83,7 @@ commit of the reusable workflow being run — workflow and scripts can never dri
 | Repo | `byte_check` | `size_check` |
 |---|---|---|
 | `kalya` | ✅ adopting | ❌ (no baseline yet) |
-| `crea-map` | local copy — migration is follow-up | local copy |
 
-`crea-map` keeps its own local gates for now; it is the source these scripts were
-generalized from, and migrating it to this shared workflow is deliberate follow-up,
-not part of the rollout that introduced this repo.
+One repository still runs local copies of these gates, which were generalized from it;
+moving it onto this shared workflow is deliberate follow-up, not part of the rollout
+that introduced this repo.
